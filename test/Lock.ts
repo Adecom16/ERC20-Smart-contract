@@ -1,84 +1,135 @@
-// SPDX-License-Identifier: MIT
-const ERC20Token = artifacts.require("ERC20Token");
-const { expect } = require("chai");
+import { expect } from "chai";
+import { ethers } from "hardhat";
+const {
+  time,
+  loadFixture,
+} = require("@nomicfoundation/hardhat-toolbox/network-helpers");
 
-contract("ERC20Token", (accounts) => {
-  let token;
-  const [owner, receiver, another] = accounts;
+import { ERC20Token } from "../typechain-types";
 
-  beforeEach(async () => {
-    token = await ERC20Token.new();
+describe("ERC20Token", function () {
+
+  
+   
+  async function deployERC20TokenContract() {
+    const ERC20TokenContract = await ethers.getContractFactory("ERC20Token");
+    const erc20TokenContract = await ERC20TokenContract.deploy();
+    const [owner, receiver] = await ethers.getSigners();
+    return { erc20TokenContract, owner, receiver };
+  }
+
+  beforeEach(async function () {
+    await loadFixture(deployERC20TokenContract);
   });
 
-  it("should have the correct name, symbol, decimal and supply", async () => {
-    const name = await token.tokenName();
-    const symbol = await token.tokenSymbol();
-    const decimal = await token.decimal();
-    const supply = await token.TokenSupply();
+  describe("Deployment", function () {
+    it("Should deploy the ERC20Token contract", async function () {
+      const { erc20TokenContract } = await loadFixture(deployERC20TokenContract);
+      expect(erc20TokenContract.address).to.not.equal(0);
+    });
 
-    expect(name).to.equal("AdeToken");
-    expect(symbol).to.equal("ATK");
-    expect(decimal).to.be.a.bignumber.equal("18");
-    expect(supply).to.be.a.bignumber.equal(web3.utils.toWei("1000000"));
+    it("Should initialize with correct token details", async function () {
+      const { erc20TokenContract } = await loadFixture(deployERC20TokenContract);
+      expect(await erc20TokenContract.tokenName()).to.equal("AdeToken");
+      expect(await erc20TokenContract.tokenSymbol()).to.equal("ATK");
+      expect(await erc20TokenContract.decimal()).to.equal(18);
+      expect(await erc20TokenContract.TokenSupply()).to.equal(1000000 * 10 ** 18);
+      expect(await erc20TokenContract.accountBalance(owner.address)).to.equal(1000000 * 10 ** 18);
+    });
   });
 
-  it("should assign the total supply to the owner", async () => {
-    const balance = await token.accountBalance(owner);
+  describe("Functionality", function () {
+    it("Should transfer tokens", async function () {
+      const { erc20TokenContract, owner, receiver } = await loadFixture(deployERC20TokenContract);
+      const initialBalanceOwner = await erc20TokenContract.accountBalance(owner.address);
+      const initialBalanceReceiver = await erc20TokenContract.accountBalance(receiver.address);
+      const amount = ethers.parseUnits("100", 18);
 
-    expect(balance).to.be.a.bignumber.equal(await token.TokenSupply());
+      await erc20TokenContract.connect(owner).transferTokens(receiver.address, amount);
+
+      const finalBalanceOwner = await erc20TokenContract.accountBalance(owner.address);
+      const finalBalanceReceiver = await erc20TokenContract.accountBalance(receiver.address);
+
+      expect(finalBalanceOwner).to.equal(initialBalanceOwner.sub(amount));
+      expect(finalBalanceReceiver).to.equal(initialBalanceReceiver.add(amount));
+    });
+
+    it("Should emit TokenTransfer event on token transfer", async function () {
+      const { erc20TokenContract, owner, receiver } = await loadFixture(deployERC20TokenContract);
+      const amount = ethers.parseUnits("100", 18);
+
+      await expect(erc20TokenContract.connect(owner).transferTokens(receiver.address, amount))
+        .to.emit(erc20TokenContract, "TokenTransfer")
+        .withArgs(owner.address, receiver.address, amount);
+    });
+
+   it("Should calculate transfer fee correctly", async function () {
+    const { erc20TokenContract, owner, receiver } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("100", 18);
+
+    // Set a fee rate of 5%
+    await erc20TokenContract.setFeeRate(5); // Assuming you have a function to set the fee rate
+    const transferFee = await erc20TokenContract.Fee(amount);
+
+    expect(transferFee).to.equal(amount.div(20)); // 5% of the transfer amount
   });
 
-  it("should transfer tokens to the receiver and deduct a fee", async () => {
-    const amount = web3.utils.toWei("100");
-    const fee = web3.utils.toWei("10");
-    const transferAmount = web3.utils.toWei("90");
+  it("Should revert when transferring with insufficient balance", async function () {
+    const { erc20TokenContract, owner, receiver } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("2000000", 18); // Set an amount greater than the total supply
 
-    await token.transferTokens(receiver, amount);
-
-    const ownerBalance = await token.accountBalance(owner);
-    const receiverBalance = await token.accountBalance(receiver);
-
-    expect(ownerBalance).to.be.a.bignumber.equal(
-      (await token.TokenSupply()).sub(amount)
-    );
-    expect(receiverBalance).to.be.a.bignumber.equal(transferAmount);
+    await expect(erc20TokenContract.connect(owner).transferTokens(receiver.address, amount))
+      .to.be.revertedWith("Insufficient balance");
   });
 
-  it("should emit a TokenTransfer event when tokens are transferred", async () => {
-    const amount = web3.utils.toWei("100");
-    const fee = web3.utils.toWei("10");
-    const transferAmount = web3.utils.toWei("90");
+  it("Should revert when transferring to zero address", async function () {
+    const { erc20TokenContract, owner } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("100", 18);
 
-    const receipt = await token.transferTokens(receiver, amount);
-
-    expect(receipt.logs.length).to.equal(1);
-    expect(receipt.logs[0].event).to.equal("TokenTransfer");
-    expect(receipt.logs[0].args.sender).to.equal(owner);
-    expect(receipt.logs[0].args.receiver).to.equal(receiver);
-    expect(receipt.logs[0].args.amount).to.be.a.bignumber.equal(transferAmount);
+    await expect(erc20TokenContract.connect(owner).transferTokens("0x0000000000000000000000000000000000000000", amount))
+      .to.be.revertedWith("Invalid receiver address");
   });
 
-  it("should revert if the receiver address is invalid", async () => {
-    const amount = web3.utils.toWei("100");
+  it("Should revert when transferring zero amount", async function () {
+    const { erc20TokenContract, owner, receiver } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("0", 18); // Zero amount
 
-    await expect(token.transferTokens("0x0000000000000000000000000000000000000000", amount)).to.be.revertedWith(
-      "Invalid receiver address"
-    );
+    await expect(erc20TokenContract.connect(owner).transferTokens(receiver.address, amount))
+      .to.be.revertedWith("Transfer amount must be greater than zero");
   });
 
-  it("should revert if the transfer amount is zero", async () => {
-    const amount = web3.utils.toWei("0");
+  it("Should emit TokenTransfer event on token transfer", async function () {
+    const { erc20TokenContract, owner, receiver } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("100", 18);
 
-    await expect(token.transferTokens(receiver, amount)).to.be.revertedWith(
-      "Transfer amount must be greater than zero"
-    );
+    await expect(erc20TokenContract.connect(owner).transferTokens(receiver.address, amount))
+      .to.emit(erc20TokenContract, "TokenTransfer")
+      .withArgs(owner.address, receiver.address, amount);
   });
 
-  it("should revert if the sender balance is insufficient", async () => {
-    const amount = web3.utils.toWei("1000001");
+  it("Should update recipient balance correctly after transfer", async function () {
+    const { erc20TokenContract, owner, receiver } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("100", 18);
 
-    await expect(token.transferTokens(receiver, amount)).to.be.revertedWith(
-      "Insufficient balance"
-    );
+    await erc20TokenContract.connect(owner).transferTokens(receiver.address, amount);
+    const receiverBalance = await erc20TokenContract.accountBalance(receiver.address);
+
+    expect(receiverBalance).to.equal(amount);
+  });
+
+  it("Should deduct fee from sender's balance during transfer", async function () {
+    const { erc20TokenContract, owner, receiver } = await deployERC20TokenContract();
+    const amount = ethers.parseUnits("100", 18);
+
+    // Set a fee rate of 5%
+    await erc20TokenContract.setFeeRate(5); // Assuming you have a function to set the fee rate
+    const transferFee = await erc20TokenContract.Fee(amount);
+    const initialBalance = await erc20TokenContract.accountBalance(owner.address);
+
+    await erc20TokenContract.connect(owner).transferTokens(receiver.address, amount);
+    const finalBalance = await erc20TokenContract.accountBalance(owner.address);
+
+    expect(finalBalance).to.equal(initialBalance.sub(amount).sub(transferFee));
+  });
   });
 });
