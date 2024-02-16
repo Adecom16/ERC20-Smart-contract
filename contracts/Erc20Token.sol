@@ -8,8 +8,12 @@ contract ERC20Token {
     uint256 public TokenSupply = 1000000 * 10 ** uint256(decimal);
 
     mapping(address => uint256) public accountBalance;
+    mapping(address => mapping(address => uint256)) public allowances;
 
     event TokenTransfer(address indexed sender, address indexed receiver, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+    event TokensDeposited(address indexed account, uint256 amount);
+    event TokensWithdrawn(address indexed account, uint256 amount);
 
     constructor() {
         accountBalance[msg.sender] = TokenSupply;
@@ -31,7 +35,45 @@ contract ERC20Token {
         return true;
     }
 
+    function depositTokens(uint256 _amount) public returns (bool) {
+        require(_amount > 0, "Deposit amount must be greater than zero");
+        accountBalance[msg.sender] += _amount;
+
+        emit TokensDeposited(msg.sender, _amount);
+
+        return true;
+    }
+
+    function withdrawTokens(uint256 _amount) public returns (bool) {
+        require(_amount > 0, "Withdrawal amount must be greater than zero");
+        require(accountBalance[msg.sender] >= _amount, "Insufficient balance");
+
+        accountBalance[msg.sender] -= _amount;
+
+        emit TokensWithdrawn(msg.sender, _amount);
+
+        return true;
+    }
+
+    function approve(address _spender, uint256 _amount) public returns (bool) {
+        require(_spender != address(0), "Invalid spender address");
+
+        allowances[msg.sender][_spender] = _amount;
+
+        emit Approval(msg.sender, _spender, _amount);
+
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public view returns (uint256) {
+        return allowances[_owner][_spender];
+    }
+
     function Fee(uint256 _amount) internal pure returns (uint256) {
-        return _amount / 10; 
+        return _amount / 10;
+    }
+
+    function balanceOf(address _account) public view returns (uint256) {
+        return accountBalance[_account];
     }
 }
